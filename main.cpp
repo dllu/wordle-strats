@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 int sim(std::string guess, const std::string &ans) {
@@ -77,6 +78,20 @@ struct rowi {
     int res;
 };
 
+int letters(const std::string &s) {
+    std::vector<int> hist(26, 0);
+    for (char c : s) {
+        hist[c - 'a']++;
+    }
+    int n = 0;
+    for (int k : hist) {
+        if (k > 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
 class solver {
     friend class wordle;
     int sims(const int guess, const int ans) {
@@ -87,20 +102,6 @@ class solver {
         return sim_result[key];
     }
     std::vector<int> sim_result;
-
-    static int letters(const std::string &s) {
-        std::vector<int> hist(26, 0);
-        for (char c : s) {
-            hist[c - 'a']++;
-        }
-        int n = 0;
-        for (int k : hist) {
-            if (k > 0) {
-                n++;
-            }
-        }
-        return n;
-    }
 
     std::vector<rowi> from_row(const std::vector<row> &rs) const {
         std::vector<rowi> rsi;
@@ -121,14 +122,19 @@ class solver {
     std::vector<int> answer_letters;
 
     std::vector<int> solve_s(const std::vector<row> &rs) {
-        return solve(from_row(rs));
+        return solve(from_row(rs), all_valid());
     }
 
-    std::vector<int> solve(const std::vector<rowi> &rs) {
+    std::vector<int> all_valid() const {
         std::vector<int> valid;
         for (int i = 0; i < answers.size(); i++) {
             valid.push_back(i);
         }
+        return valid;
+    }
+
+    std::vector<int> solve(const std::vector<rowi> &rs,
+                           std::vector<int> valid) {
         for (const auto &r : rs) {
             std::vector<int> valid2;
             for (const int i : valid) {
@@ -167,6 +173,12 @@ class solver {
     }
 };
 
+struct minimax_res {
+    int depth;
+    int population;
+    int play;
+};
+
 class wordle {
    public:
     void survivle_s(const std::vector<row> &g, const std::string ans) {
@@ -187,7 +199,7 @@ class wordle {
             }
             return;
         }
-        auto nex = guess_solver.solve(g);
+        auto nex = guess_solver.solve(g, guess_solver.all_valid());
         std::sort(nex.begin(), nex.end(), [&](int x, int y) {
             return guess_solver.answer_letters[x] <
                    guess_solver.answer_letters[y];
@@ -199,6 +211,59 @@ class wordle {
             g.pop_back();
         }
     }
+    minimax_res wordle_solve(std::vector<rowi> &g, const int depth,
+                             const std::vector<int> &valid,
+                             const int max_depth) {
+        std::vector<int> nex;
+        if (depth > 0) {
+            nex = answer_solver.solve({g[g.size() - 1]}, valid);
+        } else {
+            nex = valid;
+        }
+        if (depth == max_depth) {
+            return {max_depth, static_cast<int>(nex.size()), 0};
+        }
+        if (nex.size() == 1) {
+            return {depth, 1, nex[0]};
+        }
+        minimax_res best{99999, 99999, 0};
+        for (int i = 0; i < answer_solver.guesses.size(); i++) {
+            minimax_res worst{0, 0, 0};
+            std::unordered_set<int> patterns;
+            for (const int ans : nex) {
+                patterns.insert(answer_solver.sims(i, ans));
+            }
+
+            for (const int pattern : patterns) {
+                g.push_back({i, pattern});
+                minimax_res x = wordle_solve(g, depth + 1, nex,
+                                             std::min(max_depth, best.depth));
+                if (x.depth > worst.depth ||
+                    (x.depth == worst.depth &&
+                     x.population > worst.population)) {
+                    worst = x;
+                }
+                g.pop_back();
+            }
+            if (worst.depth < best.depth ||
+                (worst.depth == best.depth &&
+                 worst.population < best.population)) {
+                best = worst;
+                best.play = i;
+                if (depth == 0) {
+                    std::cerr << best.depth << ", " << answer_solver.guesses[i]
+                              << ", " << best.population << std::endl;
+                }
+            }
+        }
+        return best;
+    }
+    minimax_res wordle_solve_s(const std::vector<row> &g) {
+        auto gi = answer_solver.from_row(g);
+        auto nex = answer_solver.solve(gi, answer_solver.all_valid());
+        return wordle_solve(gi, 0, nex, 2);
+    }
+
     void opener() {
         int best = 99999;
         int besti = 0;
@@ -211,10 +276,13 @@ class wordle {
             return answer_solver.guess_letters[i] >
                    answer_solver.guess_letters[j];
         });
-        for (int xi = 0; xi < answer_solver.guesses.size(); xi++) {
+        // for (int xi = 0; xi < answer_solver.guesses.size(); xi++) {
+        int xi = answer_solver.guesses_ind["crane"];
+        {
             for (int xj = 0; xj < xi; xj++) {
                 for (int xk = 0; xk < xj; xk++) {
-                    const int i = x[xi];
+                    // const int i = x[xi];
+                    const int i = xi;
                     const int j = x[xj];
                     const int k = x[xk];
                     int worst = 0;
@@ -223,7 +291,8 @@ class wordle {
                         const auto s2 = answer_solver.sims(j, a);
                         const auto s3 = answer_solver.sims(k, a);
                         const auto w =
-                            answer_solver.solve({{i, s1}, {j, s2}, {k, s3}});
+                            answer_solver.solve({{i, s1}, {j, s2}, {k, s3}},
+                                                answer_solver.all_valid());
                         if (w.size() > worst) {
                             worst = w.size();
                             if (worst >= best) {
@@ -258,14 +327,24 @@ int main() {
     auto guesses{load("guesses.txt")};
     guesses.insert(guesses.end(), answers.begin(), answers.end());
     std::sort(answers.begin(), answers.end());
-    std::sort(guesses.begin(), guesses.end());
+    // std::sort(guesses.begin(), guesses.end());
+
+    /*
+    std::sort(
+        guesses.begin(), guesses.end(),
+        [&](std::string i, std::string j) { return letters(i) > letters(j); });
+        */
     wordle w(answers, guesses);
     /*
     w.survivle_s({}, "cocco");
     */
-    w.opener();
+    // w.opener();
+    auto res = w.wordle_solve_s(
+        {{"crane", "bbbyy"}, {"bolts", "bbbby"}, {"wimpy", "bbbbb"}});
+    std::cerr << res.depth << ", " << w.answer_solver.guesses[res.play] << ", "
+              << res.population << std::endl;
     const auto solution = w.answer_solver.solve_s(
-        {{"crane", "bbbbb"}, {"south", "bbybb"}, {"lumpy", "ygbbg"}});
+        {{"crane", "bbbyy"}, {"bolts", "bbbby"}, {"wimpy", "bbbbb"}});
     for (const auto &s : solution) {
         std::cout << w.answer_solver.answers[s] << std::endl;
     }
